@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>Calculadora de Cortes</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      padding: 8px;
+      background: #f0f0f0;
+      color: #333;
+      margin: 0;
+      touch-action: manipulation;
+    }
+    .container {
+      max-width: 100%;
+      margin: auto;
+      background: white;
+      padding: 12px;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    input {
+      width: 100%;
+      padding: 9px;
+      margin: 5px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      box-sizing: border-box;
+      font-size: 14px;
+    }
+    input:focus {
+      background-color: #FFDE9E;
+      outline: 2px solid #FFB74D;
+      border-color: #FFB74D;
+      transition: outline 0.2s ease;
+    }
+    .results {
+      margin-top: 12px;
+      line-height: 1.6;
+      font-size: 14px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      background: #f9f9f9;
+      margin: 12px 0;
+      width: 100%;
+      height: 60vh;
+      min-height: 300px;
+      max-height: 700px;
+      border-radius: 6px;
+      display: block;
+    }
+    .footer {
+      margin-top: 18px;
+      font-size: 12px;
+      color: #555;
+      text-align: center;
+      padding-top: 8px;
+      border-top: 1px solid #eee;
+    }
+    .footer p {
+      margin: 4px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2 style="text-align: center; color: #0056b3; margin-top: 0;">Calculadora de Cortes</h2>
+
+    <label for="pliegoAncho"><strong>Tamaño Pliego (mm)</strong></label>
+    <div style="display: flex; gap: 8px;">
+      <input type="number" id="pliegoAncho" placeholder="Ancho pliego" min="0" step="any" autocomplete="off" aria-label="Ancho del pliego en milímetros">
+      <input type="number" id="pliegoAlto" placeholder="Alto pliego" min="0" step="any" autocomplete="off" aria-label="Alto del pliego en milímetros">
+    </div>
+
+    <label for="piezaAncho"><strong>Tamaño Corte (mm)</strong></label>
+    <div style="display: flex; gap: 8px;">
+      <input type="number" id="piezaAncho" placeholder="Ancho corte" min="0" step="any" autocomplete="off" aria-label="Ancho del corte en milímetros">
+      <input type="number" id="piezaAlto" placeholder="Alto corte" min="0" step="any" autocomplete="off" aria-label="Alto del corte en milímetros">
+    </div>
+
+    <label for="dobleCorte"><strong>Doble Corte (mm)</strong></label>
+    <input type="number" id="dobleCorte" placeholder="Espacio entre cortes" min="0" step="0.1" autocomplete="off" aria-label="Espacio entre cortes en milímetros">
+
+    <canvas id="plano"></canvas>
+
+    <div class="results">
+      <p><strong>Cortes por pliego:</strong> <span id="cortesPorPliego">0</span></p>
+      <p><strong>Cortes utilizables:</strong> <span id="utilizables">0</span></p>
+      <p><strong>Cortes horizontales:</strong> <span id="horizontales">0</span></p>
+      <p><strong>Cortes verticales:</strong> <span id="verticales">0</span></p>
+      <p><strong>Cortes Totales:</strong> <span id="noCortesTotales">0</span></p>
+    </div>
+
+    <div class="footer">
+      Desarrollado por <strong>Marcelo Bassi - Qwen</strong> - 2025
+    </div>
+  </div>
+
+  <script>
+    /**
+     * Selecciona todo el texto al hacer foco
+     */
+    function selectAllOnFocus() {
+      document.querySelectorAll('input').forEach(input => {
+        input.addEventListener('focus', function () {
+          const self = this;
+          setTimeout(() => self.select(), 10);
+        });
+
+        input.addEventListener('keydown', function (e) {
+          const form = Array.from(this.parentNode.parentNode.querySelectorAll('input'));
+          const index = form.indexOf(this);
+
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (index < form.length - 1) {
+              const nextInput = form[index + 1];
+              nextInput.focus();
+              setTimeout(() => nextInput.select(), 10);
+            } else {
+              this.blur();
+            }
+          }
+
+          if (e.key === 'Backspace' && this.value === '' && index > 0) {
+            e.preventDefault();
+            const prevInput = form[index - 1];
+            prevInput.focus();
+            setTimeout(() => prevInput.select(), 10);
+          }
+        });
+      });
+    }
+
+    /**
+     * Ajusta el canvas para alta densidad de píxeles (DPI)
+     * @param {HTMLCanvasElement} canvas
+     * @returns {{ctx: CanvasRenderingContext2D, anchoReal: number, altoReal: number}}
+     */
+    function ajustarCanvas(canvas) {
+      const dpi = window.devicePixelRatio || 1;
+      const anchoReal = canvas.offsetWidth;
+      const altoReal = canvas.offsetHeight;
+      canvas.width = anchoReal * dpi;
+      canvas.height = altoReal * dpi;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpi, dpi);
+      return { ctx, anchoReal, altoReal };
+    }
+
+    /**
+     * Dibuja una cota (línea de medida) con etiqueta
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {number} x1
+     * @param {number} y1
+     * @param {number} x2
+     * @param {number} y2
+     * @param {string} etiqueta
+     * @param {string} color
+     * @param {number} offset
+     * @param {boolean} esVertical
+     */
+    function dibujarCota(ctx, x1, y1, x2, y2, etiqueta, color, offset, esVertical = false) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      // Flechas
+      ctx.beginPath();
+      ctx.moveTo(x1, y1 - 5);
+      ctx.lineTo(x1, y1 + 5);
+      ctx.moveTo(x2, y1 - 5);
+      ctx.lineTo(x2, y1 + 5);
+      if (!esVertical) {
+        ctx.moveTo(x1, y1 - 5);
+        ctx.lineTo(x1, y1 + 5);
+        ctx.moveTo(x2, y1 - 5);
+        ctx.lineTo(x2, y1 + 5);
+      } else {
+        ctx.moveTo(x1 - 5, y1);
+        ctx.lineTo(x1 + 5, y1);
+        ctx.moveTo(x2 - 5, y2);
+        ctx.lineTo(x2 + 5, y2);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = "black";
+      ctx.font = "13px Arial";
+      ctx.textAlign = "center";
+      if (!esVertical) {
+        ctx.fillText(etiqueta, (x1 + x2) / 2, y1 + offset);
+      } else {
+        ctx.save();
+        ctx.translate(x1 + offset, (y1 + y2) / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText(etiqueta, 0, 0);
+        ctx.restore();
+      }
+    }
+
+    /**
+     * Calcula cuántas piezas caben en el área útil
+     * @param {number} ancho
+     * @param {number} alto
+     * @param {number} areaAncho
+     * @param {number} areaAlto
+     * @param {number} dobleCorte
+     * @returns {{h: number, v: number, total: number}}
+     */
+    function calcularPiezas(ancho, alto, areaAncho, areaAlto, dobleCorte) {
+      const h = Math.floor((areaAncho + dobleCorte) / (ancho + dobleCorte));
+      const v = Math.floor((areaAlto + dobleCorte) / (alto + dobleCorte));
+      return { h: Math.max(0, h), v: Math.max(0, v), total: h * v };
+    }
+
+    /**
+     * Calcula el mejor resultado considerando orientación
+     * @param {number} pliegoAncho
+     * @param {number} pliegoAlto
+     * @param {number} piezaAncho
+     * @param {number} piezaAlto
+     * @param {number} dobleCorte
+     * @returns {Object|null}
+     */
+    function obtenerResultado(pliegoAncho, pliegoAlto, piezaAncho, piezaAlto, dobleCorte) {
+      if (pliegoAncho <= 0 || pliegoAlto <= 0) return null;
+
+      const areaUtilAncho = pliegoAncho - 10;
+      const areaUtilAlto = pliegoAlto - 10;
+
+      if (piezaAncho <= 0 || piezaAlto <= 0) return null;
+
+      const orientacion1 = calcularPiezas(piezaAncho, piezaAlto, areaUtilAncho, areaUtilAlto, dobleCorte);
+      const orientacion2 = calcularPiezas(piezaAlto, piezaAncho, areaUtilAncho, areaUtilAlto, dobleCorte);
+      const usarGirado = orientacion2.total > orientacion1.total;
+      const mejor = usarGirado ? orientacion2 : orientacion1;
+
+      const anchoFinal = usarGirado ? piezaAlto : piezaAncho;
+      const altoFinal = usarGirado ? piezaAncho : piezaAlto;
+
+      const totalAnchoCortes = mejor.h * anchoFinal + (mejor.h - 1) * dobleCorte;
+      const totalAltoCortes = mejor.v * altoFinal + (mejor.v - 1) * dobleCorte;
+
+      return {
+        cortesPorPliego: mejor.total,
+        utilizables: mejor.total,
+        horizontales: mejor.h,
+        verticales: mejor.v,
+        noCortesTotales: mejor.total,
+        anchoFinal,
+        altoFinal,
+        totalAnchoCortes,
+        totalAltoCortes,
+        usarGirado
+      };
+    }
+
+    /**
+     * Dibuja solo el pliego (sin cortes)
+     */
+    function dibujarPliegoSolo(pliegoAncho, pliegoAlto) {
+      const canvas = document.getElementById("plano");
+      const { ctx, anchoReal, altoReal } = ajustarCanvas(canvas);
+
+      const margen = 60;
+      const wDisponible = anchoReal - margen * 2;
+      const hDisponible = altoReal - margen * 2;
+
+      const escalaX = wDisponible / pliegoAncho;
+      const escalaY = hDisponible / pliegoAlto;
+      const escala = Math.min(escalaX, escalaY, 1.8);
+
+      const w = pliegoAncho * escala;
+      const h = pliegoAlto * escala;
+      const x0 = (anchoReal - w) / 2;
+      const y0 = (altoReal - h) / 2;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Pliego
+      ctx.fillStyle = "#f7f3e9";
+      ctx.fillRect(x0, y0, w, h);
+      ctx.strokeStyle = "#555";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x0, y0, w, h);
+
+      // Cotas del pliego
+      const margenCotas = pliegoAncho < 500 || pliegoAlto < 500 ? 50 : 40;
+      dibujarCota(ctx, x0, y0 + h + margenCotas, x0 + w, y0 + h + margenCotas, `${pliegoAncho}`, "black", 16);
+      dibujarCota(ctx, x0 + w + margenCotas, y0, x0 + w + margenCotas, y0 + h, `${pliegoAlto}`, "black", 12, true);
+    }
+
+    /**
+     * Dibuja el montaje de piezas en el pliego
+     */
+    function dibujarMontaje(pliegoAncho, pliegoAlto, anchoFinal, altoFinal, numHorizontal, numVertical, dobleCorte, totalAnchoCortes, totalAltoCortes) {
+      if (numHorizontal <= 0 || numVertical <= 0) {
+        dibujarPliegoSolo(pliegoAncho, pliegoAlto);
+        return;
+      }
+
+      const canvas = document.getElementById("plano");
+      const { ctx, anchoReal, altoReal } = ajustarCanvas(canvas);
+
+      const margen = 60;
+      const wDisponible = anchoReal - margen * 2;
+      const hDisponible = altoReal - margen * 2;
+
+      const escalaX = wDisponible / pliegoAncho;
+      const escalaY = hDisponible / pliegoAlto;
+      const escala = Math.min(escalaX, escalaY, 1.8);
+
+      const w = pliegoAncho * escala;
+      const h = pliegoAlto * escala;
+      const x0 = (anchoReal - w) / 2;
+      const y0 = (altoReal - h) / 2;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Pliego
+      ctx.fillStyle = "#f7f3e9";
+      ctx.fillRect(x0, y0, w, h);
+      ctx.strokeStyle = "#555";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x0, y0, w, h);
+
+      // Área útil
+      const areaUtilAncho = pliegoAncho - 10;
+      const areaUtilAlto = pliegoAlto - 10;
+      const wUtil = areaUtilAncho * escala;
+      const hUtil = areaUtilAlto * escala;
+      const xUtil = x0 + (w - wUtil) / 2;
+      const yUtil = y0 + (h - hUtil) / 2;
+
+      // Bloque de cortes
+      const totalAnchoOcupado = numHorizontal * anchoFinal + (numHorizontal - 1) * dobleCorte;
+      const totalAltoOcupado = numVertical * altoFinal + (numVertical - 1) * dobleCorte;
+
+      const startX = xUtil + (wUtil - totalAnchoOcupado * escala) / 2;
+      const startY = yUtil + (hUtil - totalAltoOcupado * escala) / 2;
+
+      // Dibujar piezas
+      for (let i = 0; i < numHorizontal; i++) {
+        for (let j = 0; j < numVertical; j++) {
+          const x = startX + i * (anchoFinal + dobleCorte) * escala;
+          const y = startY + j * (altoFinal + dobleCorte) * escala;
+          const pw = anchoFinal * escala;
+          const ph = altoFinal * escala;
+
+          ctx.fillStyle = "white";
+          ctx.fillRect(x, y, pw, ph);
+          ctx.strokeRect(x, y, pw, ph);
+
+          // Espacio doble corte
+          if (dobleCorte > 0 && i < numHorizontal - 1) {
+            ctx.fillStyle = "rgba(255, 0, 0, 0.1)";
+            ctx.fillRect(x + pw, y, dobleCorte * escala, ph);
+          }
+          if (dobleCorte > 0 && j < numVertical - 1) {
+            ctx.fillStyle = "rgba(255, 0, 0, 0.1)";
+            ctx.fillRect(x, y + ph, pw, dobleCorte * escala);
+          }
+        }
+      }
+
+      // Cotas del corte individual (rojo)
+      if (numHorizontal > 0) {
+        const yCotaAncho = startY - 25;
+        dibujarCota(ctx, startX, yCotaAncho, startX + anchoFinal * escala, yCotaAncho, `${anchoFinal}`, "red", -8);
+      }
+      if (numVertical > 0) {
+        const xCotaAlto = startX - 25;
+        dibujarCota(ctx, xCotaAlto, startY, xCotaAlto, startY + altoFinal * escala, `${altoFinal}`, "red", -10, true);
+      }
+
+      // Cotas del bloque total (celeste)
+      if (numHorizontal > 0) {
+        const yCotaBloque = y0 + h + 20;
+        dibujarCota(ctx, startX, yCotaBloque, startX + totalAnchoOcupado * escala, yCotaBloque, `${totalAnchoCortes}`, "#91D7FF", 16);
+      }
+      if (numVertical > 0) {
+        const xCotaBloque = x0 + w + 20;
+        dibujarCota(ctx, xCotaBloque, startY, xCotaBloque, startY + totalAltoOcupado * escala, `${totalAltoCortes}`, "#91D7FF", 12, true);
+      }
+
+      // Cotas del pliego (negro)
+      const margenCotas = pliegoAncho < 500 || pliegoAlto < 500 ? 50 : 40;
+      dibujarCota(ctx, x0, y0 + h + margenCotas, x0 + w, y0 + h + margenCotas, `${pliegoAncho}`, "black", 16);
+      dibujarCota(ctx, x0 + w + margenCotas, y0, x0 + w + margenCotas, y0 + h, `${pliegoAlto}`, "black", 12, true);
+
+      // Etiqueta de total
+      ctx.fillStyle = "black";
+      ctx.font = "14px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`Total: ${numHorizontal * numVertical} piezas`, anchoReal / 2, y0 - 20);
+    }
+
+    /**
+     * Calcula y actualiza resultados y dibujo
+     */
+    function calcular() {
+      const pliegoAncho = parseFloat(document.getElementById("pliegoAncho").value) || 0;
+      const pliegoAlto = parseFloat(document.getElementById("pliegoAlto").value) || 0;
+      const piezaAncho = parseFloat(document.getElementById("piezaAncho").value) || 0;
+      const piezaAlto = parseFloat(document.getElementById("piezaAlto").value) || 0;
+      const dobleCorte = parseFloat(document.getElementById("dobleCorte").value) || 0;
+
+      // Validación de valores no negativos
+      if ([pliegoAncho, pliegoAlto, piezaAncho, piezaAlto, dobleCorte].some(v => v < 0)) {
+        alert("Por favor, ingrese valores no negativos.");
+        return;
+      }
+
+      const resultado = obtenerResultado(pliegoAncho, pliegoAlto, piezaAncho, piezaAlto, dobleCorte);
+
+      if (!resultado) {
+        document.getElementById("cortesPorPliego").textContent = "0";
+        document.getElementById("utilizables").textContent = "0";
+        document.getElementById("horizontales").textContent = "0";
+        document.getElementById("verticales").textContent = "0";
+        document.getElementById("noCortesTotales").textContent = "0";
+        dibujarPliegoSolo(pliegoAncho, pliegoAlto);
+        return;
+      }
+
+      // Mostrar resultados
+      document.getElementById("cortesPorPliego").textContent = resultado.cortesPorPliego;
+      document.getElementById("utilizables").textContent = resultado.utilizables;
+      document.getElementById("horizontales").textContent = resultado.horizontales;
+      document.getElementById("verticales").textContent = resultado.verticales;
+      document.getElementById("noCortesTotales").textContent = resultado.noCortesTotales;
+
+      // Dibujar
+      dibujarMontaje(
+        pliegoAncho, pliegoAlto,
+        resultado.anchoFinal, resultado.altoFinal,
+        resultado.horizontales, resultado.verticales,
+        dobleCorte,
+        resultado.totalAnchoCortes, resultado.totalAltoCortes
+      );
+    }
+
+    // Inicialización
+    document.addEventListener("DOMContentLoaded", function () {
+      selectAllOnFocus();
+      const inputs = document.querySelectorAll("input");
+      inputs.forEach(input => input.addEventListener("input", calcular));
+      calcular();
+    });
+
+    // Resize con debounce
+    let resizeTimeout;
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(calcular, 100);
+    });
+  </script>
+</body>
+</html>
